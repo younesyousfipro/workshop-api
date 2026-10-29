@@ -1,0 +1,6 @@
+# Generated locally: rebuilt inside the image
+build
+.gradle
+src/main/java-generated
+
+.git
