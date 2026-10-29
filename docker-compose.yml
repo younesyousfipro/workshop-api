@@ -1,13 +1,23 @@
 services:
 
   app:
-    image: workshop-organizer
+    build: .
+    image: workshop-api:local
     ports:
       - "8080:8080"
     environment:
       SPRING_DATASOURCE_URL: "jdbc:postgresql://db:5432/workshopsdb"
       SPRING_DATASOURCE_USERNAME: workshops_user
       SPRING_DATASOURCE_PASSWORD: oc2024
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/api/notions"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
 
   db:
     image: postgres:13
@@ -15,3 +25,14 @@ services:
       POSTGRES_USER: workshops_user
       POSTGRES_PASSWORD: oc2024
       POSTGRES_DB: workshopsdb
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # -h forces TCP: during its first init Postgres runs a temporary server on the Unix socket only
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "workshops_user", "-d", "workshopsdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  db-data:
