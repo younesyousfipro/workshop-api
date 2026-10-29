@@ -42,11 +42,7 @@ To compile and run the application locally, follow these steps:
    ```
    For production, package the application as WAR and use a tomcat server
 
-To run correctly the application with docker after you building it with tag workshop-organizer, run the following
-
-```bash
-docker compose up -d
-```
+To run the application with Docker, see [Run with Docker](#run-with-docker).
 
 ## Configuration
 
@@ -75,6 +71,34 @@ When you’re ready to package the application for deployment, create a deployab
 ```
 
 The generated war file can be used with many application servers such as Tomcat, Wildfly...
+
+## Run with Docker
+
+The `Dockerfile` builds and packages the application in a multi-stage build: an `eclipse-temurin:21-jdk` stage runs `./gradlew bootWar`, then an `eclipse-temurin:21-jre-alpine` stage runs the WAR with `java -jar` as a non-root user. The WAR is executable (embedded Tomcat), so no application server is needed. Tests are not run in the image (see [Testing](#testing)).
+
+With Docker Compose (recommended), the application and a PostgreSQL 13 database:
+
+```bash
+docker compose up -d --build   # build the image and start both services
+docker compose ps              # wait for both services to be "(healthy)"
+curl http://localhost:8080/api/workshops
+```
+
+Stop with `docker compose down` (data is kept in the `db-data` volume), or `docker compose down -v` to also delete the data.
+
+| | |
+|---|---|
+| Port | 8080 for the API (all routes under `/api`); the database port is not published |
+| Environment variables | `SPRING_DATASOURCE_*`, see [Configuration](#configuration); the URL host is `db`, the Compose service name |
+| Start order | the API starts once the database health check (`pg_isready`) passes |
+| Health checks | database: `pg_isready`; API: `GET /api/notions` every 10 s, after a 30 s start period |
+| Persistence | named volume `db-data` on `/var/lib/postgresql/data` |
+| Credentials | local development values, also the defaults in `application.properties`; never used outside Compose |
+| Image size | ~390 MB (JRE + 54 MB WAR) |
+
+The `POSTGRES_*` variables are only read when the volume is empty: after changing them, run `docker compose down -v`.
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md).
 
 ## Publishing to GitLab Registry
 
