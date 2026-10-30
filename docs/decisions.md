@@ -10,6 +10,7 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | GitLab is the source of truth; GitHub is a read-only push mirror | manual double push, CI on GitHub | a single CI, no manual sync |
 | Work on a branch, merge into `main` through a merge request | commits on `main` | the pipeline is tested on a branch before merging |
 | Repository docs in English (2026-10-28) | French | same language as the client's README |
+| Public GitLab group and projects (2026-10-30) | private (initial choice, 2026-10-24) | recommended by the mentor; the code is already public on the GitHub mirror; Kubernetes pulls images without registry credentials. Consequence: pipeline logs are public, so secrets are masked and protected CI/CD variables, never printed |
 
 ## Containerization (2026-10-30)
 
