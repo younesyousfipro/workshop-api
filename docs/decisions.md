@@ -24,7 +24,7 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | Build files copied before the sources, then `./gradlew dependencies` | one `COPY` of the whole project | Gradle and the dependencies stay in the layer cache while the build files do not change |
 | WAR run with `java -jar` | Tomcat server image (README: "WAR for Tomcat") | `bootWar` produces an executable WAR with an embedded Tomcat |
 | WAR copied with `*.war` and renamed `app.war` | exact file name | the file name contains the project version, which each release will change |
-| Non-root user `app` | root (image default) | limits the impact if the app is compromised; costs two lines since port 8080 is above 1024 and the app only writes to `/tmp`; Kubernetes `restricted` profile requires it. `olympic-tracker` still runs as root: to align later |
+| Non-root user `app` | root (image default) | limits the impact if the app is compromised; costs two lines since port 8080 is above 1024 and the app only writes to `/tmp`; Kubernetes `restricted` profile requires it. `olympic-tracker` also runs as non-root since 2026-10-30 |
 | Tests not run in the image (`bootWar` does not run them) | `./gradlew build` in the build stage | tests get their own CI job with a JUnit report (Ex2); same choice as `olympic-tracker` |
 | `.dockerignore` excludes `build`, `.gradle`, `src/main/java-generated`, `.git` | no `.dockerignore` | smaller build context; generated OpenAPI sources are rebuilt in the image, a stale local copy must not slip in |
 
