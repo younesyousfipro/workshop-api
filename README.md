@@ -62,6 +62,22 @@ We take testing seriously! To verify the correctness of our application, run the
 
 During execution junit reports are generated in the `build/test-results/test` folder.
 
+### Unified test script
+
+`scripts/run-tests.sh` runs the tests the same way locally and in CI. The same script is used in [olympic-tracker](https://gitlab.com/younesyousfipro-group/olympic-tracker): it detects the project type, then here runs `./gradlew clean test` and copies the JUnit XML reports (one per test class) into `test-results/`.
+
+```bash
+./scripts/run-tests.sh
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | tests passed |
+| other, usually `1` (passed through from Gradle) | tests failed, the reports are in `test-results/` |
+| `2` | tests could not run: missing tool or no report produced (e.g. compilation error) |
+
+Requires Bash and **JDK 21**. With a newer JDK (e.g. 25), the tests fail because Mockito cannot create its mocks: on macOS, run `export JAVA_HOME=$(/usr/libexec/java_home -v 21)` first.
+
 ## Packaging
 
 When you’re ready to package the application for deployment, create a deployable WAR file:

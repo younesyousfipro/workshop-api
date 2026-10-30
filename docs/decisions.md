@@ -43,3 +43,15 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | Credentials in clear in `docker-compose.yml` | `.env` file ignored by git | local development values, already public in the client's `application.properties`; a `.env` would break the one-command `docker compose up -d`. Deployed environments get Kubernetes Secrets (Ex3) |
 | Client's default password in `application.properties` left as is | removing it | client code; overridden by `SPRING_DATASOURCE_PASSWORD` at runtime. Recommended to the client: remove it from the code |
 | SQL dump in `db/` not mounted | mount in `/docker-entrypoint-initdb.d` | Hibernate creates the tables (`ddl-auto=update`) |
+
+## Test script (2026-10-30)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| Bash script `scripts/run-tests.sh` | Python | the script only chains commands; Bash is in every Debian-based CI image, Python is not guaranteed. Consequence: the CI image must provide Bash (not the case of Alpine images by default) |
+| Same file in both repositories, project type detected from marker files (`package.json` + `angular.json`, or `gradlew`) | one script per repository; shared `ci-templates` project | one behaviour for both apps, and each repository stays self-contained. A shared project remains possible (question for the mentor) |
+| Reports collected into `test-results/` | changing the output folder in `build.gradle` | client configuration untouched; the CI only needs one report path for both apps |
+| Reports collected even when tests fail; the run fails if no report is found | stop at the first failure | GitLab needs the report to show which test failed; a run without a report means no test was checked (e.g. compilation error) |
+| Exit code of the test tool passed through; `2` when the tests could not run | always `1` | tells "the code is broken" from "the environment is broken"; keeps tool-specific codes (e.g. 137 = killed, out of memory) |
+| JDK 21 required, Java version not checked by the script | version check in the script | under Java 25 the tests fail (Mockito cannot create its mocks). The CI image will be a JDK 21; the check would only help on a developer machine |
+| `test-results/` ignored by git | — | generated output, published by the CI |
