@@ -116,6 +116,33 @@ The `POSTGRES_*` variables are only read when the volume is empty: after changin
 
 Design choices are recorded in [docs/decisions.md](docs/decisions.md).
 
+## CI/CD pipeline
+
+[`.gitlab-ci.yml`](.gitlab-ci.yml) runs on every branch push (branch pipelines only, so a merge request shows the status of its branch pipeline without running a second one). The same file is used in [olympic-tracker](https://gitlab.com/younesyousfipro-group/olympic-tracker): each job only runs in the repository whose project type it matches.
+
+| Stage | What it does |
+|---|---|
+| `test` | runs [`scripts/run-tests.sh`](scripts/run-tests.sh) in the job image; the JUnit report is shown in the pipeline's *Tests* tab, even when tests fail |
+
+Differences between the two projects:
+
+| | olympic-tracker | workshop-api |
+|---|---|---|
+| Job (selected by) | `test:npm` (`angular.json` exists) | `test:gradle` (`gradlew` exists) |
+| Job image | `node:24` + Chromium installed with `apt-get` (Karma runs Chrome headless) | `eclipse-temurin:21-jdk` |
+| Cache | `.npm/`, keyed on `package-lock.json` | `.gradle/wrapper` and `.gradle/caches`, keyed on `build.gradle` and the wrapper properties |
+| Tests | 5 (Jasmine/Karma) | 2 (JUnit, repositories mocked, no database) |
+| Duration, empty cache | ~1.5 min | ~1.5 min |
+
+The test stage uses no secret. To reproduce the job locally in the same image:
+
+```bash
+docker run --rm -v "$PWD":/src:ro eclipse-temurin:21-jdk bash -c '
+  cp -r /src /app && cd /app && ./scripts/run-tests.sh'
+```
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md).
+
 ## Publishing to GitLab Registry
 
 To publish your application to a GitLab registry, follow these steps:
