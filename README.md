@@ -62,6 +62,22 @@ We take testing seriously! To verify the correctness of our application, run the
 
 During execution junit reports are generated in the `build/test-results/test` folder.
 
+### Unified test script
+
+`scripts/run-tests.sh` runs the tests the same way locally and in CI. The same script is used in [olympic-tracker](https://gitlab.com/younesyousfipro-group/olympic-tracker): it detects the project type, then here runs `./gradlew clean test` and copies the JUnit XML reports (one per test class) into `test-results/`.
+
+```bash
+./scripts/run-tests.sh
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | tests passed |
+| other, usually `1` (passed through from Gradle) | tests failed, the reports are in `test-results/` |
+| `2` | tests could not run: missing tool or no report produced (e.g. compilation error) |
+
+Requires Bash and **JDK 21**. With a newer JDK (e.g. 25), the tests fail because Mockito cannot create its mocks: on macOS, run `export JAVA_HOME=$(/usr/libexec/java_home -v 21)` first.
+
 ## Packaging
 
 When you’re ready to package the application for deployment, create a deployable WAR file:
@@ -97,6 +113,33 @@ Stop with `docker compose down` (data is kept in the `db-data` volume), or `dock
 | Image size | ~390 MB (JRE + 54 MB WAR) |
 
 The `POSTGRES_*` variables are only read when the volume is empty: after changing them, run `docker compose down -v`.
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md).
+
+## CI/CD pipeline
+
+[`.gitlab-ci.yml`](.gitlab-ci.yml) runs on every branch push (branch pipelines only, so a merge request shows the status of its branch pipeline without running a second one). The same file is used in [olympic-tracker](https://gitlab.com/younesyousfipro-group/olympic-tracker): each job only runs in the repository whose project type it matches.
+
+| Stage | What it does |
+|---|---|
+| `test` | runs [`scripts/run-tests.sh`](scripts/run-tests.sh) in the job image; the JUnit report is shown in the pipeline's *Tests* tab, even when tests fail |
+
+Differences between the two projects:
+
+| | olympic-tracker | workshop-api |
+|---|---|---|
+| Job (selected by) | `test:npm` (`angular.json` exists) | `test:gradle` (`gradlew` exists) |
+| Job image | `node:24` + Chromium installed with `apt-get` (Karma runs Chrome headless) | `eclipse-temurin:21-jdk` |
+| Cache | `.npm/`, keyed on `package-lock.json` | `.gradle/wrapper` and `.gradle/caches`, keyed on `build.gradle` and the wrapper properties |
+| Tests | 5 (Jasmine/Karma) | 2 (JUnit, repositories mocked, no database) |
+| Duration, empty cache | ~1.5 min | ~1.5 min |
+
+The test stage uses no secret. To reproduce the job locally in the same image:
+
+```bash
+docker run --rm -v "$PWD":/src:ro eclipse-temurin:21-jdk bash -c '
+  cp -r /src /app && cd /app && ./scripts/run-tests.sh'
+```
 
 Design choices are recorded in [docs/decisions.md](docs/decisions.md).
 

@@ -43,3 +43,30 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | Credentials in clear in `docker-compose.yml` | `.env` file ignored by git | local development values, already public in the client's `application.properties`; a `.env` would break the one-command `docker compose up -d`. Deployed environments get Kubernetes Secrets (Ex3) |
 | Client's default password in `application.properties` left as is | removing it | client code; overridden by `SPRING_DATASOURCE_PASSWORD` at runtime. Recommended to the client: remove it from the code |
 | SQL dump in `db/` not mounted | mount in `/docker-entrypoint-initdb.d` | Hibernate creates the tables (`ddl-auto=update`) |
+
+## Test script (2026-10-30)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| Bash script `scripts/run-tests.sh` | Python | the script only chains commands; Bash is in every Debian-based CI image, Python is not guaranteed. Consequence: the CI image must provide Bash (not the case of Alpine images by default) |
+| Same file in both repositories, project type detected from marker files (`package.json` + `angular.json`, or `gradlew`) | one script per repository; shared `ci-templates` project | one behaviour for both apps, and each repository stays self-contained. A shared project remains possible (question for the mentor) |
+| Reports collected into `test-results/` | changing the output folder in `build.gradle` | client configuration untouched; the CI only needs one report path for both apps |
+| Reports collected even when tests fail; the run fails if no report is found | stop at the first failure | GitLab needs the report to show which test failed; a run without a report means no test was checked (e.g. compilation error) |
+| Exit code of the test tool passed through; `2` when the tests could not run | always `1` | tells "the code is broken" from "the environment is broken"; keeps tool-specific codes (e.g. 137 = killed, out of memory) |
+| JDK 21 required, Java version not checked by the script | version check in the script | under Java 25 the tests fail (Mockito cannot create its mocks). The CI image will be a JDK 21; the check would only help on a developer machine |
+| `test-results/` ignored by git | — | generated output, published by the CI |
+
+## CI pipeline: test stage (2026-10-30)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| Same `.gitlab-ci.yml` copied in both repositories | shared `ci-templates` project with `include:` | same choice as the test script: each repository stays self-contained. Switching later only means moving the file and replacing it with an `include:` |
+| One job per project type (`test:npm`, `test:gradle`) selected with `rules: exists` (`angular.json`, `gradlew`), sharing a hidden `.test` job | one job with an image variable set in each repository | the file stays identical and nothing is hidden in the GitLab settings. The CI detects the type itself because it must pick the job image before the script runs |
+| Front image `node:24` + Chromium installed by `apt-get` | third-party Node + Chrome image | official images only; Debian-based, so Bash is available. Cost: about 30 to 60 s per run, to revisit if the CI quota gets tight |
+| Back image `eclipse-temurin:21-jdk` | `gradle` image | same image as the Dockerfile build stage; JDK 21 avoids the Mockito failure seen under Java 25 |
+| npm cache `.npm/` keyed on `package-lock.json`, set through `npm_config_*` variables | caching `node_modules/` | recommended by the client's README and GitLab; `node_modules` would be a very large archive. The test script is unchanged |
+| Gradle cache `.gradle/wrapper` and `.gradle/caches` (`GRADLE_USER_HOME` in the project), keyed on `build.gradle` and the wrapper properties; Gradle daemon disabled | no cache | Gradle (~130 MB) and the dependencies are not downloaded on every run; a daemon is useless in a one-shot job |
+| JUnit report published with `when: always` | report only on success | same logic as the script: the report is most useful when tests fail |
+| Branch pipelines only (`workflow: rules: if: $CI_COMMIT_BRANCH`) | default rules | jobs with `rules:` would also run in merge request pipelines, so two pipelines per push (400 min/month quota). The merge request still shows the branch pipeline status. Tag pipelines will be decided with semantic-release |
+| Only the `test` stage for now | declaring `build` and `release` in advance | each step adds its own stage |
+| No secret used by the test stage | — | registry and release tokens come with the build and release stages |

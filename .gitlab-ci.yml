@@ -1,0 +1,58 @@
+# Generic pipeline: the same file is used in olympic-tracker and workshop-api.
+# Each test job only runs in the repository whose project type it matches.
+
+stages:
+  - test
+
+# Branch pipelines only: jobs with rules would otherwise also run in a
+# duplicate merge request pipeline
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+.test:
+  stage: test
+  script:
+    - ./scripts/run-tests.sh
+  artifacts:
+    when: always
+    reports:
+      junit: test-results/*.xml
+    expire_in: 1 week
+
+test:npm:
+  extends: .test
+  image: node:24
+  rules:
+    - exists:
+        - angular.json
+  variables:
+    npm_config_cache: $CI_PROJECT_DIR/.npm
+    npm_config_prefer_offline: "true"
+    CHROME_BIN: /usr/bin/chromium
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends chromium
+
+test:gradle:
+  extends: .test
+  image: eclipse-temurin:21-jdk
+  rules:
+    - exists:
+        - gradlew
+  variables:
+    GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle
+    GRADLE_OPTS: -Dorg.gradle.daemon=false
+  cache:
+    key:
+      files:
+        - build.gradle
+        - gradle/wrapper/gradle-wrapper.properties
+    paths:
+      - .gradle/wrapper/
+      - .gradle/caches/
