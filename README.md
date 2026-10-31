@@ -123,6 +123,7 @@ Design choices are recorded in [docs/decisions.md](docs/decisions.md).
 | Stage | What it does |
 |---|---|
 | `test` | runs [`scripts/run-tests.sh`](scripts/run-tests.sh) in the job image; the JUnit report is shown in the pipeline's *Tests* tab, even when tests fail |
+| `build` | once tests pass, builds the `Dockerfile` with Docker-in-Docker and pushes the image to the GitLab Container Registry (see [Container images](#container-images)) |
 
 Differences between the two projects:
 
@@ -132,14 +133,38 @@ Differences between the two projects:
 | Job image | `node:24` + Chromium installed with `apt-get` (Karma runs Chrome headless) | `eclipse-temurin:21-jdk` |
 | Cache | `.npm/`, keyed on `package-lock.json` | `.gradle/wrapper` and `.gradle/caches`, keyed on `build.gradle` and the wrapper properties |
 | Tests | 5 (Jasmine/Karma) | 2 (JUnit, repositories mocked, no database) |
-| Duration, empty cache | ~1.5 min | ~1.5 min |
+| Test job duration, empty cache | ~1.5 min | ~1.5 min |
+| Build job | same `build` job; only the `Dockerfile` differs (Node build + nginx runtime) | same `build` job; only the `Dockerfile` differs (Gradle build + JRE runtime) |
+| Pipeline duration (test + build) | ~2.5 min | ~4 min |
 
-The test stage uses no secret. To reproduce the job locally in the same image:
+No secret to configure: the build job logs in to the registry with the credentials GitLab gives each job, which expire with it. To reproduce the test job locally in the same image:
 
 ```bash
 docker run --rm -v "$PWD":/src:ro eclipse-temurin:21-jdk bash -c '
   cp -r /src /app && cd /app && ./scripts/run-tests.sh'
 ```
+
+### Container images
+
+The `build` job pushes the image to the project's Container Registry (*Deploy → Container registry*), `registry.gitlab.com/younesyousfipro-group/workshop-api`, with two tags:
+
+| Tag | Example | Moves | Use |
+|---|---|---|---|
+| commit SHA (`$CI_COMMIT_SHORT_SHA`) | `:a1b2c3d4` | never | know exactly which code runs; roll back |
+| branch slug (`$CI_COMMIT_REF_SLUG`) | `:main` | to the latest build of the branch | get the latest build of a branch |
+
+The image only contains the API: PostgreSQL comes from the official `postgres:13` image (see [Run with Docker](#run-with-docker)). To run the image of a branch locally with its database (public project, no login needed), give it the name Compose expects:
+
+```bash
+docker pull registry.gitlab.com/younesyousfipro-group/workshop-api:main
+docker tag registry.gitlab.com/younesyousfipro-group/workshop-api:main workshop-api:local
+docker compose up -d --no-build   # without --no-build, Compose may rebuild the image from the local sources
+curl http://localhost:8080/api/workshops
+```
+
+Images are built for `linux/amd64` (GitLab.com runners): on an Apple Silicon Mac, Docker Desktop runs them with emulation and prints a "platform does not match" warning.
+
+The pipeline publishes a container image, not the Gradle package described in [Publishing to GitLab Registry](#publishing-to-gitlab-registry).
 
 Design choices are recorded in [docs/decisions.md](docs/decisions.md).
 
