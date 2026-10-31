@@ -70,3 +70,13 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | Branch pipelines only (`workflow: rules: if: $CI_COMMIT_BRANCH`) | default rules | jobs with `rules:` would also run in merge request pipelines, so two pipelines per push (400 min/month quota). The merge request still shows the branch pipeline status. Tag pipelines will be decided with semantic-release |
 | Only the `test` stage for now | declaring `build` and `release` in advance | each step adds its own stage |
 | No secret used by the test stage | — | registry and release tokens come with the build and release stages |
+
+## CI pipeline: build stage (2026-10-31)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| One image, two tags: commit SHA (`:a1b2c3d4`, never moves) and branch name (`:main`, moves with each push) | branch in the image path (`<image>/main:a1b2c3d4`), the other reading of the instructions' example | the SHA tag tells exactly which code runs and allows a rollback; the branch tag gives the latest build of a branch. Same image name everywhere, so Helm only changes the tag |
+| Branch name as a slug (`$CI_COMMIT_REF_SLUG`) | raw branch name | a `/` (`feature/x`) is not allowed in a Docker tag |
+| Image built on every branch | `main` only | the pipeline is tested on a branch before merging. Cost: about 3 CI minutes more per push |
+| Docker-in-Docker (`docker:29` job image + `docker:29-dind` service, TLS on) | Kaniko, Buildah; mounting the host Docker socket | listed in the instructions and documented by GitLab for its hosted runners; Kaniko is no longer maintained by Google; the host socket is not available on GitLab.com runners (and gives root on the host). Major version 29 = same as local Docker |
+| Registry login with the job credentials (`$CI_REGISTRY_USER` / `$CI_REGISTRY_PASSWORD`, `--password-stdin`) | personal or project access token in a CI/CD variable | no secret to create or rotate; the credentials expire with the job; the password never appears in the public job log |
