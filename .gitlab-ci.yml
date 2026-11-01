@@ -4,12 +4,14 @@
 stages:
   - test
   - build
+  - release
 
-# Branch pipelines only: jobs with rules would otherwise also run in a
-# duplicate merge request pipeline
+# Branch and tag pipelines only: jobs with rules would otherwise also run in a
+# duplicate merge request pipeline. Tag pipelines build the versioned image.
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
 
 .test:
   stage: test
@@ -70,9 +72,45 @@ build:
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   # Two tags on the same image:
-  #   commit SHA  - never moves: tells which code runs, allows a rollback
-  #   branch name - moves to the latest build of the branch
+  #   commit SHA - never moves: tells which code runs, allows a rollback
+  #   branch pipeline: branch name - moves to the latest build of the branch
+  #   tag pipeline: version (git tag v1.2.3 -> image tag 1.2.3), never moves
   script:
-    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" .
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG="${CI_COMMIT_TAG#v}"
+      else
+        IMAGE_TAG="$CI_COMMIT_REF_SLUG"
+      fi
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" .
     - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
-    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+    - docker push "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
+
+# semantic-release (configured in .releaserc.json): computes the next version
+# from the commit messages, commits the version files and CHANGELOG.md, tags
+# that commit and creates the GitLab release. The pushed tag starts a tag
+# pipeline, which builds the versioned image.
+release:
+  stage: release
+  image: node:24
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    # Full history: the default shallow clone can miss the last version tag,
+    # and semantic-release would then release 1.0.0
+    GIT_DEPTH: 0
+  # Pinned versions; preset kept on major 9: major 10 needs a newer changelog
+  # writer than the one release-notes-generator ships
+  before_script:
+    - >-
+      npm install -g
+      semantic-release@25.0.9
+      @semantic-release/commit-analyzer@13.0.1
+      @semantic-release/release-notes-generator@14.1.1
+      @semantic-release/changelog@7.0.0
+      @semantic-release/exec@7.1.0
+      @semantic-release/git@11.0.1
+      @semantic-release/gitlab@13.3.3
+      conventional-changelog-conventionalcommits@9.3.1
+  script:
+    - semantic-release
