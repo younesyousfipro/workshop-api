@@ -166,6 +166,8 @@ docker compose up -d --no-build   # without --no-build, Compose may rebuild the 
 curl http://localhost:8080/api/workshops
 ```
 
+**Cleanup.** A cleanup policy (*Settings → Packages and registries → Container registry → Cleanup policies*) runs every week: it keeps `:main`, every version tag and the 10 most recent tags (*Keep tags matching* `(?:main|\d+\.\d+\.\d+)`; GitLab anchors the pattern itself), and removes the other tags (commit SHAs, work branches) older than 30 days. Removing a SHA tag does not remove an image that still has its version tag; images left without any tag are deleted by GitLab after 24 hours. To remove an image by hand: *Deploy → Container Registry*, select all its tags (its commit SHA and its branch or version), *Delete selected*.
+
 Images are built for `linux/amd64` (GitLab.com runners): on an Apple Silicon Mac, Docker Desktop runs them with emulation and prints a "platform does not match" warning.
 
 The pipeline publishes a container image, not the Gradle package described in [Publishing to GitLab Registry](#publishing-to-gitlab-registry).
@@ -198,7 +200,15 @@ It only reads commit messages, never the code. It is written in JavaScript, so i
 | `!` after the type, or a `BREAKING CHANGE:` footer | `feat!: rename API field` | major: 0.2.4 → 1.0.0 |
 | `ci`, `docs`, `test`, `chore`, `refactor` | `docs: update README` | none |
 
-With several commits since the last version, the highest change wins. A message that does not follow the convention is ignored without any error, so a fix written as `fixed the bug` is never released. Commits are written without a scope.
+How the next version is computed:
+
+- Only the commits merged into `main` since the last version tag count; pushing to another branch never releases.
+- The highest change wins, and the numbers on its right go back to zero: from 0.2.5, a `feat` gives 0.3.0, not 0.3.5.
+- One merge request gives one release, whatever its number of commits: `fix` + `build` + `feat` + `docs` → 0.3.0, with the first three in the notes.
+- A merge with only `docs`, `ci`, `test`, `chore` or `refactor` commits still runs the pipeline (tests, `:<sha>` and `:main` images) but publishes no version. A documentation-only push can skip the pipeline with `git push -o ci.skip`.
+- A message that does not follow the convention is ignored without any error, so a fix written as `fixed the bug` is never released. Commits are written without a scope.
+
+For example, from 0.2.5: an nginx or base image upgrade (`build:`) or a bug fix (`fix:`) gives 0.2.6; a new feature (`feat:`) gives 0.3.0.
 
 ### What happens on `main`
 
