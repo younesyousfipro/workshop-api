@@ -117,3 +117,10 @@ The first release (0.2.5) was published, but its tag pipeline was skipped and no
 | | dropping `[skip ci]` without a rule | the release commit would start a `main` pipeline too: two builds of the same commit at the same time, the SHA image tag overwritten, a few more CI minutes per release (no loop though: a `chore` commit never triggers a version) |
 | Missing `:0.2.5` image built by a pipeline run by hand on the tag (*Build → Pipelines → New pipeline*) | retagging the image of the merge commit | that image was built before the version existed (its project files say the previous version); a manual pipeline is not skipped by `[skip ci]` |
 
+## Container registry cleanup (2026-11-02)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| GitLab **cleanup policy**, weekly: keep `main`, every version tag (`(?:main\|\d+\.\d+\.\d+)`) and the 10 most recent tags; remove the other tags (`.*`) older than 30 days | no cleanup; a cleanup job in the pipeline | every push adds a SHA-tagged image that nothing removes. The policy is a built-in setting, no code or CI minutes. Released versions are never removed (keep rules win over remove rules) |
+| Pattern written as a group without `^`/`$` | `^(main\|…)$` | GitLab wraps the pattern in `\A…\Z` itself; the group keeps both anchors on every alternative |
+| One-time manual cleanup: all images from the setup and test pipelines deleted, only two kept (`main` + `a4663338`, `0.2.5` + `e8c21abc`) | waiting for the policy | the policy only removes tags older than 30 days; the setup images have no use. A registry deletes images through their tags: an image is removed once no tag points to it |
