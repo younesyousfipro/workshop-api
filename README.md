@@ -155,7 +155,7 @@ The `build` job pushes the image to the project's Container Registry (*Deploy �
 | branch slug (`$CI_COMMIT_REF_SLUG`) | `:main` | branch pipeline | to the latest build of the branch | get the latest build of a branch |
 | version (git tag without its `v`) | `:0.2.5` | tag pipeline, after a release | never | deploy a released version |
 
-The release commit (`chore: release X.Y.Z [skip ci]`) starts no `main` pipeline, so `:main` stays on the image of the commit before it; the two only differ by the version number in the project files.
+The release commit (`chore: release X.Y.Z`) starts no `main` pipeline (excluded by `workflow:rules`), so `:main` stays on the image of the commit before it; the two only differ by the version number in the project files. The release commit itself is built by its tag pipeline.
 
 The image only contains the API: PostgreSQL comes from the official `postgres:13` image (see [Run with Docker](#run-with-docker)). To run the image of a branch locally with its database (public project, no login needed), give it the name Compose expects:
 
@@ -209,14 +209,14 @@ merge into main ─► pipeline "main": test → build (:<sha>, :main) → relea
     1. finds the last version tag (e.g. v0.2.4)                     │
     2. reads the commits since that tag, computes the next version  │
     3. writes CHANGELOG.md and the version in the project files     │
-    4. commits them to main ("chore: release X.Y.Z [skip ci]")      │
+    4. commits them to main ("chore: release X.Y.Z")                │
     5. tags that commit vX.Y.Z and creates the GitLab release ◄─────┘
                                                                     │
   the pushed tag starts a pipeline "vX.Y.Z": test → build (:<sha>, :X.Y.Z)
 ```
 
 - No releasable commit since the last tag: the job ends green without releasing.
-- `[skip ci]` keeps the release commit from starting another `main` pipeline.
+- `workflow:rules` keeps the release commit (title starting with `chore: release `) from starting a `main` pipeline: no loop, and the commit is built once, by its tag pipeline. `[skip ci]` in the message is not an option: GitLab reads it in the message of the commit, so it would also skip the tag pipeline (it did on the first releases, see [docs/decisions.md](docs/decisions.md)).
 - The image tagged `:X.Y.Z` is built from the release commit, so the version in its files matches its tag.
 - After a release, `main` on GitLab has one more commit than a local clone: pull before starting a new branch.
 
@@ -297,7 +297,7 @@ unset GITLAB_TOKEN
 
 ### Why the version is committed
 
-semantic-release recommends keeping the version in git tags only and not committing during a release. The instructions of this project require the version to be synchronized in the project files, so the version files and `CHANGELOG.md` are committed by `@semantic-release/git`. The cost: a token allowed to push to `main`, `[skip ci]` on the release commit, and a pull after each release. See [docs/decisions.md](docs/decisions.md).
+semantic-release recommends keeping the version in git tags only and not committing during a release. The instructions of this project require the version to be synchronized in the project files, so the version files and `CHANGELOG.md` are committed by `@semantic-release/git`. The cost: a token allowed to push to `main`, a `workflow:rules` exception for the release commit, and a pull after each release. See [docs/decisions.md](docs/decisions.md).
 
 ## Publishing to GitLab Registry
 
