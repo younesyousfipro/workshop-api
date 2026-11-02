@@ -31,6 +31,11 @@ spec:
             secretKeyRef:
               name: workshop-organizer-db-secret
               key: password
+        # Same endpoint as the Compose health check: answers once Spring is up and the database reachable
+        readinessProbe:
+          httpGet:
+            path: /api/notions
+            port: 8080
       # Created with kubectl from a read_registry deploy token, never committed
       imagePullSecrets:
       - name: workshop-api-registry
