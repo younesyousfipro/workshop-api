@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workshop-organizer-db-pvc
+spec:
+  # No storageClassName: the cluster default class is used (standard on Minikube)
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
