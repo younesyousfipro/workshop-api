@@ -10,7 +10,7 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | GitLab is the source of truth; GitHub is a read-only push mirror | manual double push, CI on GitHub | a single CI, no manual sync |
 | Work on a branch, merge into `main` through a merge request | commits on `main` | the pipeline is tested on a branch before merging |
 | Repository docs in English (2026-10-28) | French | same language as the client's README |
-| Public GitLab group and projects (2026-10-30) | private (initial choice, 2026-10-24) | recommended by the mentor; the code is already public on the GitHub mirror; Kubernetes pulls images without registry credentials. Consequence: pipeline logs are public, so secrets are masked and protected CI/CD variables, never printed |
+| Public GitLab group and projects (2026-10-30) | private (initial choice, 2026-10-24) | recommended by the mentor; the code is already public on the GitHub mirror; Kubernetes could pull images without registry credentials (a pull secret is configured anyway, see [Kubernetes manifests](#kubernetes-manifests-2026-11-02)). Consequence: pipeline logs are public, so secrets are masked and protected CI/CD variables, never printed |
 
 ## Containerization (2026-10-30)
 
@@ -124,3 +124,25 @@ The first release (0.2.5) was published, but its tag pipeline was skipped and no
 | GitLab **cleanup policy**, weekly: keep `main`, every version tag (`(?:main\|\d+\.\d+\.\d+)`) and the 10 most recent tags; remove the other tags (`.*`) older than 30 days | no cleanup; a cleanup job in the pipeline | every push adds a SHA-tagged image that nothing removes. The policy is a built-in setting, no code or CI minutes. Released versions are never removed (keep rules win over remove rules) |
 | Pattern written as a group without `^`/`$` | `^(main\|…)$` | GitLab wraps the pattern in `\A…\Z` itself; the group keeps both anchors on every alternative |
 | One-time manual cleanup: all images from the setup and test pipelines deleted, only two kept (`main` + `a4663338`, `0.2.5` + `e8c21abc`) | waiting for the policy | the policy only removes tags older than 30 days; the setup images have no use. A registry deletes images through their tags: an image is removed once no tag points to it |
+
+## Kubernetes manifests (2026-11-02)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| No multi-arch image: the `linux/amd64` images run on Minikube on an Apple Silicon Mac | multi-arch build in CI (`FROM --platform=$BUILDPLATFORM` + buildx) | tested on 2026-11-02: Docker Desktop registers amd64 emulation (Rosetta) in the kernel of its VM, which the Minikube node shares. A multi-arch build would cost a merge request and CI minutes for no gain here |
+| Image pinned to a released version (`:0.2.5`) | `:main`, a commit SHA | reproducible deployment of a released version; `:main` moves with every merge. Choosing the tag per environment comes with Helm |
+| `imagePullSecrets` with a project **deploy token** (`read_registry`); Secret `workshop-api-registry` created with `kubectl`, never committed | no pull secret (the registry is public); the personal token used by semantic-release; one group deploy token shared by both apps | the client's TODO, and ready for a private registry. A deploy token can only read this project's images; one Secret per app keeps the two apps independent |
+| Datasource URL host `workshop-organizer-db-service` | client's `workshop-organizer-db` | no Service has that name: the API failed with `UnknownHostException`. A short name resolves in the Pod's namespace, so the same URL works in every namespace (dev, staging) |
+| Client's database names kept (user `postgres`, database `workshop-organizer-database`), different from Compose (`workshops_user`, `workshopsdb`) | aligning them with Compose | Hibernate creates the tables (`ddl-auto=update`): only the consistency inside the cluster matters. No change beyond the TODOs |
+| Password added to the client's `secret.yaml`, sandbox value `oc2024` committed | Secret created with `kubectl`, like the pull secret | the client's TODO. The value is already public (`docker-compose.yml`, `application.properties`) and the database is only reachable inside the cluster (headless Service). The registry token is a real GitLab credential, hence the difference. With Helm, the password comes from the values, given at install time for staging and never committed |
+| One `password` key read by PostgreSQL (`POSTGRES_PASSWORD`) and by the API (`SPRING_DATASOURCE_PASSWORD`) | one value per Deployment | the two must match; one source, no drift |
+| `postgres:13`, same as Compose | a newer version | one change at a time; end of life and upgrade recommendation in [Compose](#compose) |
+| Readiness probes: API `GET /api/notions` on 8080; database `pg_isready -h 127.0.0.1` with the user and database from the environment; default timings | no probe; liveness probes | not in the TODOs: without a probe, a Pod is ready as soon as its process starts. Same checks as the Compose health checks. The database Service is headless, so its DNS name only lists ready Pods. No liveness probe: a slow JVM start (emulated amd64) could get the container killed; it would need a startup probe |
+| No start order: the API restarts until the database is ready | init container waiting for the database | Kubernetes has no `depends_on`; observed: two restarts (`UnknownHostException`), then stable. An init container adds code for a start-only issue |
+| PostgreSQL data on a **PersistentVolumeClaim** (`workshop-organizer-db-pvc`, 1 Gi, `ReadWriteOnce`, default StorageClass) mounted on `/var/lib/postgresql/data` | no volume (client's manifests) | not in the TODOs: without a volume, every new database Pod starts empty. No `storageClassName`, so the manifest works on any cluster. Tested: data survives deleting the database Pod |
+| `PGDATA` in a subdirectory of the volume (`.../data/pgdata`) | data at the volume root | `initdb` refuses a non-empty directory, and some disks contain `lost+found`. One line, portable manifests |
+| Database Deployment with `strategy: Recreate` | default `RollingUpdate` | a rolling update starts the new Pod before stopping the old one: two PostgreSQL processes on the same files |
+| Client's Deployment kept for the database | StatefulSet | one replica, no change of object type; a StatefulSet (stable identity, one volume per replica) is the usual choice for a database, possible evolution |
+| Client's names, labels and `LoadBalancer` Service kept; access with `minikube service --url` | `NodePort`; `minikube tunnel` | no change beyond the TODOs. With the Docker driver on macOS the node IP is not reachable; `minikube service` opens a tunnel without `sudo` |
+| No `resources` (requests/limits) yet | adding them now | they go to `values.yaml` with the Helm chart |
+| Commit type `chore:` for manifests | `build:`, `feat:` | the image does not change: a release would publish an identical version |

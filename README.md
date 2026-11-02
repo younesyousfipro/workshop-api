@@ -309,6 +309,106 @@ unset GITLAB_TOKEN
 
 semantic-release recommends keeping the version in git tags only and not committing during a release. The instructions of this project require the version to be synchronized in the project files, so the version files and `CHANGELOG.md` are committed by `@semantic-release/git`. The cost: a token allowed to push to `main`, a `workflow:rules` exception for the release commit, and a pull after each release. See [docs/decisions.md](docs/decisions.md).
 
+## Run on Kubernetes (Minikube)
+
+The [`k8s/`](k8s/) manifests deploy the released API image and its PostgreSQL database. Tested with Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
+
+| File | Object | Role |
+|---|---|---|
+| `secret.yaml` | Secret `workshop-organizer-db-secret` | database username and password, read by both Deployments |
+| `pvc-db.yaml` | PersistentVolumeClaim `workshop-organizer-db-pvc` | 1 Gi for the database files |
+| `deployment-db.yaml` | Deployment, 1 Pod `postgres:13` | the database |
+| `service-db.yaml` | headless Service `workshop-organizer-db-service` | DNS name of the database, used in the datasource URL |
+| `deployment-app.yaml` | Deployment, 1 Pod | the API |
+| `service-app.yaml` | `LoadBalancer` Service `workshop-organizer-app-service` | access to the API from outside the cluster |
+
+| | |
+|---|---|
+| Image | `registry.gitlab.com/younesyousfipro-group/workshop-api:0.2.5` (released version) |
+| Ports | API 8080 (Service 8080 → container 8080); database 5432, inside the cluster only |
+| Environment variables | `SPRING_DATASOURCE_URL` (host `workshop-organizer-db-service`), `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD` from the Secret |
+| Readiness probes | API: `GET /api/notions`; database: `pg_isready`. A Pod gets traffic only once it answers |
+| Start order | none: the API restarts until the database is ready (a few restarts at first start are expected) |
+| Persistence | PVC on `/var/lib/postgresql/data` (data in the `pgdata` subdirectory); the database Deployment uses `strategy: Recreate` |
+| Credentials | database: sandbox value committed in `secret.yaml` (same as Compose); registry: pull secret `workshop-api-registry`, created by hand (below), never committed |
+
+### 1. Registry credentials (once per cluster and namespace)
+
+The project is public, so the image can be pulled anonymously; the manifests still use a pull secret, as a private registry would require.
+
+1. On GitLab: *Settings → Repository → Deploy tokens → Add token*, scope **`read_registry`** only, with an expiration date. Keep the username and token (shown once) in a password manager.
+2. Create the Secret (the token is typed without echo and stays out of the shell history):
+
+   ```bash
+   kubectl config current-context      # must be minikube
+   read -rs TOKEN
+   kubectl create secret docker-registry workshop-api-registry \
+     --docker-server=registry.gitlab.com \
+     --docker-username=<deploy token username> \
+     --docker-password="$TOKEN"
+   unset TOKEN
+   ```
+
+The kubelet (not the container) uses this Secret to pull the image. When the token expires, the Pod fails with `ErrImagePull`.
+
+### 2. Deploy and check
+
+```bash
+minikube start
+kubectl apply -f k8s/                  # from the root of this repository
+kubectl get pods -w                    # both Pods end 1/1 Running; the API may restart a few times first
+kubectl get pvc                        # Bound
+kubectl get endpointslices -l kubernetes.io/service-name=workshop-organizer-db-service   # the database Pod IP
+```
+
+### 3. Call the API
+
+```bash
+minikube service workshop-organizer-app-service --url     # keep this terminal open
+```
+
+The command prints `http://127.0.0.1:<port>` and holds a tunnel to the Service (the node IP is not reachable with the Docker driver on macOS). In another terminal:
+
+```bash
+URL=http://127.0.0.1:<port>
+curl -X POST -H 'Content-Type: application/json' -d '{"name":"Kubernetes"}' $URL/api/notions
+curl $URL/api/notions
+```
+
+### 4. Check persistence
+
+```bash
+kubectl delete pod -l app=workshop-organizer-db    # the Deployment creates a new Pod
+kubectl get pods -w                                # wait for 1/1
+curl $URL/api/notions                              # the notion is still there
+```
+
+The first call after the restart may fail while the API reopens its connections: call again.
+
+### 5. Remove
+
+```bash
+kubectl delete -f k8s/                     # also deletes the PVC: the data is lost
+kubectl delete secret workshop-api-registry
+```
+
+To stop the application but keep the data, delete only the Deployments: `kubectl delete -f k8s/deployment-app.yaml -f k8s/deployment-db.yaml`.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Look at |
+|---|---|---|
+| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, pull secret missing or token expired | `kubectl describe pod -l app=workshop-organizer-app` (Events) |
+| `CreateContainerConfigError` | Secret or key missing | `kubectl describe pod` (Events) |
+| API in `CrashLoopBackOff` with `UnknownHostException` | database Pod not ready yet (headless Service: no DNS record without a ready Pod); lasts if the database never gets ready | `kubectl logs -l app=workshop-organizer-app --previous`, `kubectl get pods` |
+| API logs `password authentication failed` | password changed in the Secret after the first start: the `POSTGRES_*` variables are only read when the volume is empty | delete the PVC to start from an empty database, or change the password in PostgreSQL |
+| database Pod `Pending` | PVC not bound | `kubectl get pvc`, `kubectl describe pvc workshop-organizer-db-pvc` |
+| `Running` but `0/1` | readiness probe failing | `kubectl describe pod`, `kubectl logs` |
+
+With a fixed tag the node keeps the image and does not pull it again, so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/workshop-api:0.2.5`.
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md#kubernetes-manifests-2026-11-02).
+
 ## Publishing to GitLab Registry
 
 To publish your application to a GitLab registry, follow these steps:
