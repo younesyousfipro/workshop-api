@@ -14,14 +14,19 @@ spec:
     spec:
       containers:
       - name: workshop-organizer-db
-      # TODO: add postgres image
+        # Same version as docker-compose.yml (see docs/decisions.md)
+        image: postgres:13
         env:
         - name: POSTGRES_USER
           valueFrom:
             secretKeyRef:
               name: workshop-organizer-db-secret
               key: username
-       # TODO: add the postgres password variable
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: workshop-organizer-db-secret
+              key: password
         - name: POSTGRES_DB
           value: workshop-organizer-database
         ports:
