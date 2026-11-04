@@ -1,0 +1,35 @@
+app:
+  replicas: 1
+  image: registry.gitlab.com/younesyousfipro-group/workshop-api
+  # Empty = appVersion from Chart.yaml
+  tag: ""
+  # Spring Boot listens on 8080 (its default, unchanged by the app and the Dockerfile).
+  # This value only tells the chart where to find it: changing it does not move the app
+  port: 8080
+  # Created with kubectl in each namespace; empty = no imagePullSecrets block
+  imagePullSecret: workshop-api-registry
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+db:
+  # Same version as docker-compose.yml (see docs/decisions.md)
+  image: postgres:13
+  # Postgres listens on 5432 (its default, unchanged by the postgres:13 image).
+  # This value only tells the chart where to find it: changing it does not move the database
+  port: 5432
+  username: postgres
+  # Local sandbox value, already public in docker-compose.yml; override per environment
+  password: oc2024
+  database: workshop-organizer-database
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

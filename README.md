@@ -242,10 +242,10 @@ Results: *Deploy → Releases* (notes per version), *Code → Tags*, [`CHANGELOG
 | notes | `@semantic-release/release-notes-generator` | release notes; only the types that trigger a version are listed (Features, Bug Fixes, Performance Improvements, Build System) |
 | prepare | `@semantic-release/changelog` | adds the notes to `CHANGELOG.md` |
 | prepare | `@semantic-release/exec` | runs [`scripts/set-version.sh`](scripts/set-version.sh) `X.Y.Z` |
-| prepare | `@semantic-release/git` | commits `CHANGELOG.md` and the version files (missing files are skipped, so the list covers both repositories) |
+| prepare | `@semantic-release/git` | commits `CHANGELOG.md`, the version files and the chart's `Chart.yaml` (missing files are skipped, so the list covers both repositories) |
 | publish | `@semantic-release/gitlab` | creates the GitLab release; comments on the merge requests it includes, opens an issue if the release fails |
 
-`scripts/set-version.sh X.Y.Z` writes the version into the project file. It detects the project type like `run-tests.sh` and fails (exit code 2) if the file does not show the new version afterwards. It does not depend on semantic-release and can be run by hand.
+`scripts/set-version.sh X.Y.Z` writes the version into the project file and into the `appVersion` of `helm/*/Chart.yaml` (the chart's default image tag). It detects the project type like `run-tests.sh` and fails (exit code 2) if a file does not show the new version afterwards. It does not depend on semantic-release and can be run by hand.
 
 The plugin versions are pinned in the release job (`npm install -g` in a `node:24` image), not in `package.json`: semantic-release is a CI tool here, not a dependency of the application. The job clones the full history (`GIT_DEPTH: 0`): with GitLab's default shallow clone (20 commits), the last version tag can be missing and semantic-release would release `1.0.0`.
 
@@ -309,46 +309,62 @@ unset GITLAB_TOKEN
 
 semantic-release recommends keeping the version in git tags only and not committing during a release. The instructions of this project require the version to be synchronized in the project files, so the version files and `CHANGELOG.md` are committed by `@semantic-release/git`. The cost: a token allowed to push to `main`, a `workflow:rules` exception for the release commit, and a pull after each release. See [docs/decisions.md](docs/decisions.md).
 
-## Run on Kubernetes (Minikube)
+## Deploy with Helm (Minikube)
 
-The [`k8s/`](k8s/) manifests deploy the released API image and its PostgreSQL database. Tested with Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
+The chart [`helm/workshop-api-chart/`](helm/workshop-api-chart/) deploys the released API image and its PostgreSQL database. Tested with Helm 4.3, Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
 
-| File | Object | Role |
-|---|---|---|
-| `secret.yaml` | Secret `workshop-organizer-db-secret` | database username and password, read by both Deployments |
-| `pvc-db.yaml` | PersistentVolumeClaim `workshop-organizer-db-pvc` | 1 Gi for the database files |
-| `deployment-db.yaml` | Deployment, 1 Pod `postgres:13` | the database |
-| `service-db.yaml` | headless Service `workshop-organizer-db-service` | DNS name of the database, used in the datasource URL |
-| `deployment-app.yaml` | Deployment, 1 Pod | the API |
-| `service-app.yaml` | `LoadBalancer` Service `workshop-organizer-app-service` | access to the API from outside the cluster |
-
-| | |
+| File | Content |
 |---|---|
-| Image | `registry.gitlab.com/younesyousfipro-group/workshop-api:0.2.5` (released version) |
-| Ports | API 8080 (Service 8080 → container 8080); database 5432, inside the cluster only |
-| Environment variables | `SPRING_DATASOURCE_URL` (host `workshop-organizer-db-service`), `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD` from the Secret |
-| Readiness probes | API: `GET /api/notions`; database: `pg_isready`. A Pod gets traffic only once it answers |
-| Start order | none: the API restarts until the database is ready (a few restarts at first start are expected) |
-| Persistence | PVC on `/var/lib/postgresql/data` (data in the `pgdata` subdirectory); the database Deployment uses `strategy: Recreate` |
-| Credentials | database: sandbox value committed in `secret.yaml` (same as Compose); registry: pull secret `workshop-api-registry`, created by hand (below), never committed |
+| `Chart.yaml` | chart name, chart `version` (bumped by hand when the chart changes), `appVersion` (the default image tag, written by `set-version.sh` at each release) |
+| `values.yaml` | default values, under `app:` (the API) and `db:` (PostgreSQL) |
+| `templates/` | one file per object, below |
+
+| Template | Object | Role |
+|---|---|---|
+| `secret.yaml` | Secret `<release>-db-secret` | database username and password, read by both Deployments |
+| `pvc-db.yaml` | PersistentVolumeClaim `<release>-db-pvc` | 1 Gi for the database files; kept by `helm uninstall` |
+| `deployment-db.yaml` | Deployment `<release>-db-deployment`, 1 Pod `postgres:13` | the database |
+| `service-db.yaml` | headless Service `<release>-db-service` | DNS name of the database, used in the datasource URL |
+| `deployment-app.yaml` | Deployment `<release>-app-deployment` | the API |
+| `service-app.yaml` | `LoadBalancer` Service `<release>-app-service` | access to the API from outside the cluster |
+
+Values:
+
+| Key | Default | Used for |
+|---|---|---|
+| `app.replicas` | `1` | API Deployment `replicas` |
+| `app.image` | `registry.gitlab.com/younesyousfipro-group/workshop-api` | image name, without tag |
+| `app.tag` | `""` | image tag; empty = `appVersion` from `Chart.yaml` |
+| `app.port` | `8080` | `containerPort`, readiness probe, Service `port` and `targetPort` (the port Spring Boot listens on) |
+| `app.imagePullSecret` | `workshop-api-registry` | pull secret name; empty = no `imagePullSecrets` |
+| `app.resources` | requests `250m` / `512Mi`, limits `1` / `768Mi` | API container `resources` |
+| `db.image` | `postgres:13` | database image, with its tag |
+| `db.port` | `5432` | `containerPort`, Service `port` and `targetPort`, datasource URL (the port PostgreSQL listens on) |
+| `db.username` | `postgres` | Secret, read by PostgreSQL and by the API |
+| `db.password` | `oc2024` | Secret, read by PostgreSQL and by the API. Sandbox value, already public in `docker-compose.yml` |
+| `db.database` | `workshop-organizer-database` | `POSTGRES_DB` and datasource URL |
+| `db.resources` | requests `100m` / `256Mi`, limits `500m` / `512Mi` | database container `resources` |
+
+Fixed in the templates: one database replica with `strategy: Recreate` (two PostgreSQL must never share the same files), PVC size 1 Gi, Service types, readiness probes (API `GET /api/notions`, database `pg_isready`). Object names, labels and the references between objects (datasource host, Secret, PVC) are all built from the release name, so they always match.
 
 Differences between the two projects:
 
 | | olympic-tracker | workshop-api |
 |---|---|---|
-| Manifests | 2: Deployment + `LoadBalancer` Service | 6: Secret, PVC, Deployment + headless Service (PostgreSQL), Deployment + `LoadBalancer` Service (API) |
-| Images | `olympic-tracker:0.1.4` | `workshop-api:0.2.5` + `postgres:13` (Docker Hub, no pull secret) |
+| Kubernetes objects | 2: Deployment + `LoadBalancer` Service | 6: Secret, PVC, Deployment + headless Service (PostgreSQL), Deployment + `LoadBalancer` Service (API) |
+| Values | `app:` | `app:` and `db:` |
+| Images | `olympic-tracker` | `workshop-api` + `postgres:13` (Docker Hub, no pull secret) |
 | Service → container port | 80 → 8080 | 8080 → 8080 |
 | Configuration | none (static files, data inside the image) | database URL, username and password as environment variables |
-| Secrets | pull secret only (created by hand) | pull secret (created by hand) + database Secret (committed, sandbox value) |
+| Secrets | pull secret only (created by hand) | pull secret (created by hand) + database Secret (rendered from the values) |
 | Readiness probe | `GET /` | API: `GET /api/notions`; database: `pg_isready` |
 | State | stateless: deleting the Pod loses nothing | PVC: data survives the Pod; `strategy: Recreate` |
 | Start order | — | none: the API restarts until the database is ready |
-| `kubectl delete -f k8s/` | nothing lost | also deletes the PVC, so the data |
+| `helm uninstall` | nothing lost | PVC kept, so the data; deleting it is a separate command |
 
 ### 1. Registry credentials (once per cluster and namespace)
 
-The project is public, so the image can be pulled anonymously; the manifests still use a pull secret, as a private registry would require.
+The project is public, so the image can be pulled anonymously; the chart still uses a pull secret, as a private registry would require. The Secret is created outside the chart on purpose: a credential is prepared with the cluster and its value never goes into Git (see [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04)).
 
 1. On GitLab: *Settings → Repository → Deploy tokens → Add token*, scope **`read_registry`** only, with an expiration date. Keep the username and token (shown once) in a password manager.
 2. Create the Secret (the token is typed without echo and stays out of the shell history):
@@ -365,63 +381,89 @@ The project is public, so the image can be pulled anonymously; the manifests sti
 
 The kubelet (not the container) uses this Secret to pull the image. When the token expires, the Pod fails with `ErrImagePull`.
 
-### 2. Deploy and check
+### 2. Check the chart
 
 ```bash
+helm lint --strict helm/workshop-api-chart
+helm template workshop-api helm/workshop-api-chart          # rendered YAML, no cluster needed
 minikube start
-kubectl apply -f k8s/                  # from the root of this repository
+helm install workshop-api helm/workshop-api-chart --dry-run=server --hide-secret   # validated by the API server, nothing created
+```
+
+`lint` checks the chart structure and the template syntax, not the Kubernetes fields: the server dry run does. A dry run prints every manifest, Secrets included: `--hide-secret` masks them.
+
+### 3. Install and check
+
+```bash
+helm install workshop-api helm/workshop-api-chart
+helm list                              # workshop-api, deployed, app version 0.2.5
 kubectl get pods -w                    # both Pods end 1/1 Running; the API may restart a few times first
-kubectl get pvc                        # Bound
-kubectl get endpointslices -l kubernetes.io/service-name=workshop-organizer-db-service   # the database Pod IP
+kubectl get pvc                        # workshop-api-db-pvc Bound
+kubectl get endpointslices -l kubernetes.io/service-name=workshop-api-db-service   # the database Pod IP
 ```
 
-### 3. Call the API
+Helm records each release revision in a Secret of the namespace (`sh.helm.release.v1.workshop-api.v1`).
+
+### 4. Call the API
 
 ```bash
-minikube service workshop-organizer-app-service --url     # keep this terminal open
+minikube service workshop-api-app-service --url     # keep this terminal open
 ```
 
-The command prints `http://127.0.0.1:<port>` and holds a tunnel to the Service (the node IP is not reachable with the Docker driver on macOS). In another terminal:
+The command prints `http://127.0.0.1:<port>` and holds a tunnel to the Service (the node IP is not reachable with the Docker driver on macOS). In another terminal, with the printed port:
 
 ```bash
-URL=http://127.0.0.1:<port>
-curl -X POST -H 'Content-Type: application/json' -d '{"name":"Kubernetes"}' $URL/api/notions
+URL=http://127.0.0.1:54321
+curl -X POST -H 'Content-Type: application/json' -d '{"name":"Helm"}' $URL/api/notions
 curl $URL/api/notions
 ```
 
-### 4. Check persistence
+### 5. Check persistence
+
+The data survives a new database Pod:
 
 ```bash
-kubectl delete pod -l app=workshop-organizer-db    # the Deployment creates a new Pod
-kubectl get pods -w                                # wait for 1/1
-curl $URL/api/notions                              # the notion is still there
+kubectl delete pod -l app=workshop-api-db
+kubectl get pods -w
+curl $URL/api/notions
 ```
 
-The first call after the restart may fail while the API reopens its connections: call again.
+The notion is still there. The first call after the restart may fail while the API reopens its connections: call again.
 
-### 5. Remove
+It also survives the removal of the release, since the PVC is kept and taken back by a release of the same name:
 
 ```bash
-kubectl delete -f k8s/                     # also deletes the PVC: the data is lost
+helm uninstall workshop-api            # prints: These resources were kept due to the resource policy
+helm install workshop-api helm/workshop-api-chart
+```
+
+Then start `minikube service` again (new port) and call `/api/notions`: the notion is still there.
+
+### 6. Remove
+
+```bash
+helm uninstall workshop-api
+kubectl delete pvc workshop-api-db-pvc     # deletes the data
 kubectl delete secret workshop-api-registry
 ```
-
-To stop the application but keep the data, delete only the Deployments: `kubectl delete -f k8s/deployment-app.yaml -f k8s/deployment-db.yaml`.
 
 ### Troubleshooting
 
 | Symptom | Likely cause | Look at |
 |---|---|---|
-| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, pull secret missing or token expired | `kubectl describe pod -l app=workshop-organizer-app` (Events) |
+| `helm install` fails: `cannot re-use a name that is still in use` | the release already exists | `helm list`; `helm uninstall workshop-api` first |
+| `helm template` or `lint` fails | template syntax, indentation | the line given in the error |
+| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, pull secret missing or token expired | `kubectl describe pod -l app=workshop-api-app` (Events) |
 | `CreateContainerConfigError` | Secret or key missing | `kubectl describe pod` (Events) |
-| API in `CrashLoopBackOff` with `UnknownHostException` | database Pod not ready yet (headless Service: no DNS record without a ready Pod); lasts if the database never gets ready | `kubectl logs -l app=workshop-organizer-app --previous`, `kubectl get pods` |
-| API logs `password authentication failed` | password changed in the Secret after the first start: the `POSTGRES_*` variables are only read when the volume is empty | delete the PVC to start from an empty database, or change the password in PostgreSQL |
-| database Pod `Pending` | PVC not bound | `kubectl get pvc`, `kubectl describe pvc workshop-organizer-db-pvc` |
+| API in `CrashLoopBackOff` with `UnknownHostException` | database Pod not ready yet (headless Service: no DNS record without a ready Pod); lasts if the database never gets ready | `kubectl logs -l app=workshop-api-app --previous`, `kubectl get pods` |
+| API logs `password authentication failed` | `db.password` changed while the PVC already holds a database: the `POSTGRES_*` variables are only read when the volume is empty | give the old password back, or delete the PVC to start from an empty database |
+| database Pod `Pending` | PVC not bound | `kubectl get pvc`, `kubectl describe pvc workshop-api-db-pvc` |
 | `Running` but `0/1` | readiness probe failing | `kubectl describe pod`, `kubectl logs` |
+| PV still `Released` after deleting the PVC (Minikube) | Minikube's provisioner only deletes the volumes it created since its last start (log: `identity annotation on PV does not match ours`) | `kubectl get pv`; `kubectl delete pv <name>`, then `minikube ssh -- sudo rm -rf /tmp/hostpath-provisioner/default/<pvc name>` (a PVC created again with that name would find the old files) |
 
 With a fixed tag the node keeps the image and does not pull it again, so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/workshop-api:0.2.5`.
 
-Design choices are recorded in [docs/decisions.md](docs/decisions.md#kubernetes-manifests-2026-11-02).
+Design choices are recorded in [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04). The chart replaces the plain manifests of the `k8s/` folder (removed, see the decisions).
 
 ## Publishing to GitLab Registry
 

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: workshop-api-chart
+description: Workshop API back-end (Spring Boot app and its PostgreSQL database)
+type: application
+# !!! IMPORTANT:Chart version, UPDATE manually when templates or values change !!!
+version: 0.1.0
+# Default image tag; app.tag in values overrides it
+appVersion: "0.2.5"

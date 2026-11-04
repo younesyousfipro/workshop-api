@@ -1,50 +1,51 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: workshop-organizer-db-deployment
+  name: {{ .Release.Name }}-db-deployment
 spec:
   replicas: 1
-  # The old Pod is stopped before the new one starts: two Postgres must never share the same files
+  # Safety: The old Pod is stopped before the new one starts: two Postgres must never share the same files
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: workshop-organizer-db
+      app: {{ .Release.Name }}-db
   template:
     metadata:
       labels:
-        app: workshop-organizer-db
+        app: {{ .Release.Name }}-db
     spec:
       containers:
       - name: workshop-organizer-db
-        # Same version as docker-compose.yml (see docs/decisions.md)
-        image: postgres:13
+        image: "{{ .Values.db.image }}"
         env:
         - name: POSTGRES_USER
           valueFrom:
             secretKeyRef:
-              name: workshop-organizer-db-secret
+              name: {{ .Release.Name }}-db-secret
               key: username
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: workshop-organizer-db-secret
+              name: {{ .Release.Name }}-db-secret
               key: password
         - name: POSTGRES_DB
-          value: workshop-organizer-database
+          value: {{ .Values.db.database }}
         # Subdirectory of the volume: initdb refuses a non-empty directory (lost+found on some disks)
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
         ports:
-        - containerPort: 5432
+        - containerPort: {{ .Values.db.port }}
         readinessProbe:
           exec:
             # -h forces TCP: during its first init Postgres runs a temporary server on the Unix socket only
             command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+        resources:
+          {{- toYaml .Values.db.resources | nindent 10 }}
         volumeMounts:
         - name: db-data
           mountPath: /var/lib/postgresql/data
       volumes:
       - name: db-data
         persistentVolumeClaim:
-          claimName: workshop-organizer-db-pvc
+          claimName: {{ .Release.Name }}-db-pvc
