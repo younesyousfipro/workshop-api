@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-app-deployment
+spec:
+  replicas: {{ .Values.app.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-app
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-app
+    spec:
+      containers:
+      - name: workshop-organizer-app
+        image: "{{ .Values.app.image }}:{{ .Values.app.tag | default .Chart.AppVersion }}"
+        ports:
+        - containerPort: {{ .Values.app.port }}
+        env:
+        - name: SPRING_DATASOURCE_URL
+          # Host = name of the database Service, resolved by the cluster DNS
+          value: jdbc:postgresql://{{ .Release.Name }}-db-service:{{ .Values.db.port }}/{{ .Values.db.database }}
+        - name: SPRING_DATASOURCE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-db-secret
+              key: username
+        - name: SPRING_DATASOURCE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-db-secret
+              key: password
+        # Same endpoint as the Compose health check: answers once Spring is up and the database reachable
+        readinessProbe:
+          httpGet:
+            path: /api/notions
+            port: {{ .Values.app.port }}
+        resources:
+          {{- toYaml .Values.app.resources | nindent 10 }}
+      {{- with .Values.app.imagePullSecret }}
+      imagePullSecrets:
+      - name: {{ . }}
+      {{- end }}

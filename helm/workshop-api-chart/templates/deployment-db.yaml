@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-db-deployment
+spec:
+  replicas: 1
+  # Safety: The old Pod is stopped before the new one starts: two Postgres must never share the same files
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-db
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-db
+    spec:
+      containers:
+      - name: workshop-organizer-db
+        image: "{{ .Values.db.image }}"
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-db-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-db-secret
+              key: password
+        - name: POSTGRES_DB
+          value: {{ .Values.db.database }}
+        # Subdirectory of the volume: initdb refuses a non-empty directory (lost+found on some disks)
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - containerPort: {{ .Values.db.port }}
+        readinessProbe:
+          exec:
+            # -h forces TCP: during its first init Postgres runs a temporary server on the Unix socket only
+            command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+        resources:
+          {{- toYaml .Values.db.resources | nindent 10 }}
+        volumeMounts:
+        - name: db-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: db-data
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-db-pvc
