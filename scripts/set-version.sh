@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Writes a release version into the project file that holds it.
+# Writes a release version into the project file that holds it, and into
+# the Helm chart's appVersion (the default image tag).
 # Called by semantic-release (@semantic-release/exec, prepare step) with the
 # computed version, but does not depend on it: it can be run by hand.
 # Usage: scripts/set-version.sh X.Y.Z
@@ -55,4 +56,15 @@ esac
 # fail rather than release with a stale version in the project file
 [[ "$current" == "$version" ]] \
   || die "version not updated (project file says '${current:-nothing}')"
+
+chart=(helm/*/Chart.yaml)
+[[ ${#chart[@]} -eq 1 && -f "${chart[0]}" ]] \
+  || die "expected exactly one helm/*/Chart.yaml"
+sed -i.bak -E "s/^appVersion: \"[^\"]*\"$/appVersion: \"$version\"/" "${chart[0]}" \
+  || die "sed failed on ${chart[0]}"
+rm -f "${chart[0]}.bak"
+app_version=$(sed -nE 's/^appVersion: "([^"]*)"$/\1/p' "${chart[0]}")
+[[ "$app_version" == "$version" ]] \
+  || die "appVersion not updated (${chart[0]} says '${app_version:-nothing}')"
+
 echo "Version set to $version"

@@ -30,7 +30,13 @@
     [
       "@semantic-release/git",
       {
-        "assets": ["CHANGELOG.md", "package.json", "package-lock.json", "build.gradle"],
+        "assets": [
+          "CHANGELOG.md",
+          "package.json",
+          "package-lock.json",
+          "build.gradle",
+          "helm/*/Chart.yaml"
+        ],
         "message": "chore: release ${nextRelease.version}\n\n${nextRelease.notes}"
       }
     ],
