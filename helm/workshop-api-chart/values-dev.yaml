@@ -1,0 +1,6 @@
+# Overrides for the dev namespace; everything else comes from values.yaml
+# (1 API replica, default resources, sandbox database password)
+app:
+  # Latest build of main (moving tag)
+  tag: main
+  imagePullPolicy: Always

@@ -1,13 +1,27 @@
+# Default values of the chart, used as is by a plain helm install.
+# An environment file (values-<env>.yaml) only overrides what differs.
+
 app:
+  # The API keeps no state (everything is in the database): its Pods are
+  # interchangeable, so it can run several replicas
   replicas: 1
   image: registry.gitlab.com/younesyousfipro-group/workshop-api
-  # Empty = appVersion from Chart.yaml
+  # Image tag to deploy. Empty = appVersion from Chart.yaml, the latest release
+  # (written by semantic-release). Set it to deploy another tag, e.g. main
   tag: ""
-  # Spring Boot listens on 8080 (its default, unchanged by the app and the Dockerfile).
-  # This value only tells the chart where to find it: changing it does not move the app
+  # IfNotPresent reuses the image already on the node: fine for a fixed tag (0.2.5).
+  # A moving tag (main) needs Always, or the node keeps the first image it pulled
+  imagePullPolicy: IfNotPresent
+  # Port Spring Boot listens on (its default, changed neither by the app nor by the
+  # Dockerfile). This value only tells the chart where to find it: changing it does
+  # not make the app listen elsewhere
   port: 8080
-  # Created with kubectl in each namespace; empty = no imagePullSecrets block
+  # Secret holding the registry deploy token. Not part of the chart: created with
+  # kubectl in each namespace (README, Registry credentials). Empty = no imagePullSecrets
   imagePullSecret: workshop-api-registry
+  # requests = what the scheduler reserves on the node, limits = the ceiling (above
+  # the memory limit, the container is killed). Estimates, not measured: the JVM sizes
+  # its heap from the memory limit; one CPU for the slow start of the emulated amd64 image
   resources:
     requests:
       cpu: 250m
@@ -17,15 +31,18 @@ app:
       memory: 768Mi
 
 db:
-  # Same version as docker-compose.yml (see docs/decisions.md)
+  # Same version as docker-compose.yml (see docs/decisions.md), in every environment
   image: postgres:13
-  # Postgres listens on 5432 (its default, unchanged by the postgres:13 image).
-  # This value only tells the chart where to find it: changing it does not move the database
+  # Port PostgreSQL listens on (its default). Same remark as app.port
   port: 5432
+  # Account and database created by PostgreSQL on its first start, then used by the API.
+  # Only read when the volume is empty: changing them later breaks the API login
   username: postgres
-  # Local sandbox value, already public in docker-compose.yml; override per environment
+  # Local sandbox value, already public in docker-compose.yml. Staging gives its own
+  # at install time (--set db.password=...), never committed
   password: oc2024
   database: workshop-organizer-database
+  # Same meaning as app.resources
   resources:
     requests:
       cpu: 100m
