@@ -1,0 +1,14 @@
+# Overrides for the staging namespace; everything else comes from values.yaml.
+# No tag: the image is appVersion, the latest release.
+# The database password is given at install time (--set db.password=...), never committed
+app:
+  # Only the API scales: the database stays at 1 replica (fixed in the template)
+  replicas: 2
+  # Measured in dev at rest: 341Mi. A 1Gi limit gives the JVM a 256Mi heap (25 %)
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
