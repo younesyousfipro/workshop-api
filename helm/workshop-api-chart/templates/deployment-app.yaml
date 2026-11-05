@@ -15,6 +15,7 @@ spec:
       containers:
       - name: workshop-organizer-app
         image: "{{ .Values.app.image }}:{{ .Values.app.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.app.imagePullPolicy }}
         ports:
         - containerPort: {{ .Values.app.port }}
         env:

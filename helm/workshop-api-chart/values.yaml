@@ -3,6 +3,8 @@ app:
   image: registry.gitlab.com/younesyousfipro-group/workshop-api
   # Empty = appVersion from Chart.yaml
   tag: ""
+  # Always for a moving tag (main): IfNotPresent would keep the first image pulled
+  imagePullPolicy: IfNotPresent
   # Spring Boot listens on 8080 (its default, unchanged by the app and the Dockerfile).
   # This value only tells the chart where to find it: changing it does not move the app
   port: 8080
