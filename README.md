@@ -311,12 +311,13 @@ semantic-release recommends keeping the version in git tags only and not committ
 
 ## Deploy with Helm (Minikube)
 
-The chart [`helm/workshop-api-chart/`](helm/workshop-api-chart/) deploys the released API image and its PostgreSQL database. Tested with Helm 4.3, Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
+The chart [`helm/workshop-api-chart/`](helm/workshop-api-chart/) deploys the API image and its PostgreSQL database into two environments, `dev` and `staging`, each in its own namespace. Tested with Helm 4.3, Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
 
 | File | Content |
 |---|---|
 | `Chart.yaml` | chart name, chart `version` (bumped by hand when the chart changes), `appVersion` (the default image tag, written by `set-version.sh` at each release) |
-| `values.yaml` | default values, under `app:` (the API) and `db:` (PostgreSQL) |
+| `values.yaml` | every value with its default, under `app:` (the API) and `db:` (PostgreSQL) |
+| `values-dev.yaml`, `values-staging.yaml` | only the values that differ in that environment |
 | `templates/` | one file per object, below |
 
 | Template | Object | Role |
@@ -335,6 +336,7 @@ Values:
 | `app.replicas` | `1` | API Deployment `replicas` |
 | `app.image` | `registry.gitlab.com/younesyousfipro-group/workshop-api` | image name, without tag |
 | `app.tag` | `""` | image tag; empty = `appVersion` from `Chart.yaml` |
+| `app.imagePullPolicy` | `IfNotPresent` | `Always` for a moving tag (`main`), otherwise the node keeps the first image it pulled |
 | `app.port` | `8080` | `containerPort`, readiness probe, Service `port` and `targetPort` (the port Spring Boot listens on) |
 | `app.imagePullSecret` | `workshop-api-registry` | pull secret name; empty = no `imagePullSecrets` |
 | `app.resources` | requests `250m` / `512Mi`, limits `1` / `768Mi` | API container `resources` |
@@ -345,7 +347,7 @@ Values:
 | `db.database` | `workshop-organizer-database` | `POSTGRES_DB` and datasource URL |
 | `db.resources` | requests `100m` / `256Mi`, limits `500m` / `512Mi` | database container `resources` |
 
-Fixed in the templates: one database replica with `strategy: Recreate` (two PostgreSQL must never share the same files), PVC size 1 Gi, Service types, readiness probes (API `GET /api/notions`, database `pg_isready`). Object names, labels and the references between objects (datasource host, Secret, PVC) are all built from the release name, so they always match.
+Fixed in the templates: one database replica with `strategy: Recreate`, in every environment (two PostgreSQL must never share the same files), PVC size 1 Gi, Service types, readiness probes (API `GET /api/notions`, database `pg_isready`). Object names, labels and the references between objects (datasource host, Secret, PVC) are all built from the release name, so they always match.
 
 Differences between the two projects:
 
@@ -360,22 +362,56 @@ Differences between the two projects:
 | Readiness probe | `GET /` | API: `GET /api/notions`; database: `pg_isready` |
 | State | stateless: deleting the Pod loses nothing | PVC: data survives the Pod; `strategy: Recreate` |
 | Start order | — | none: the API restarts until the database is ready |
+| Staging replicas | 2 Pods | API 2 Pods, database 1 |
+| Per-environment values | image tag, replicas, resources | the same, plus the database password (given at install time in staging) |
 | `helm uninstall` | nothing lost | PVC kept, so the data; deleting it is a separate command |
 
-### 1. Registry credentials (once per cluster and namespace)
+### Environments
 
-The project is public, so the image can be pulled anonymously; the chart still uses a pull secret, as a private registry would require. The Secret is created outside the chart on purpose: a credential is prepared with the cluster and its value never goes into Git (see [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04)).
+One chart, one image, two namespaces. The image carries no environment: only the values change.
+
+| | dev | staging |
+|---|---|---|
+| Namespace | `dev` | `staging` |
+| Values file | `values-dev.yaml` | `values-staging.yaml` |
+| API image tag | `main`: latest build of `main` | none, so `appVersion`: latest release (`0.2.5`) |
+| `imagePullPolicy` | `Always` (moving tag) | `IfNotPresent` (default) |
+| API replicas | 1 (default) | 2 |
+| Database replicas | 1 | 1 (fixed in the template) |
+| API resources | requests `250m` / `512Mi`, limits `1` / `768Mi` (default) | requests `500m` / `768Mi`, limits `1` / `1Gi` |
+| Database resources | requests `100m` / `256Mi`, limits `500m` / `512Mi` (default) | same |
+| Database password | sandbox default (`oc2024`) | generated, given at install time, never committed |
+| Data | PVC `workshop-api-db-pvc` in `dev` | its own PVC `workshop-api-db-pvc` in `staging` |
+| Pull secret | `workshop-api-registry` in `dev` | `workshop-api-registry` in `staging` |
+
+There is no branch per environment: `main` is the only long-lived branch. An image is promoted, not rebuilt for each environment: `dev` shows the latest merge on `main`, `staging` the latest release. Deployments are run by hand (no deploy job in the pipeline: GitLab.com runners cannot reach Minikube).
+
+Measured idle in `dev` with `kubectl top` (metrics-server addon): API `14m` CPU / `341Mi` memory, database `4m` / `84Mi`. Requests of both projects in `dev` and `staging`: about 2.55 CPU and 3 Gi, against the 4 CPU / 6 Gi given to Minikube. Compare with these numbers, not with the percentages of `kubectl describe node`: with the Docker driver the node reports the resources of the Docker Desktop VM, not the limits of the `minikube` container.
+
+The commands below use a shell variable for the chart path, and `<env>` for `dev` or `staging`:
+
+```bash
+C=helm/workshop-api-chart
+```
+
+### 1. Namespaces and registry credentials (once per cluster)
+
+The project is public, so the image can be pulled anonymously; the chart still uses a pull secret, as a private registry would require. The Secret is created outside the chart on purpose: a credential is prepared with the cluster and its value never goes into Git (see [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04)). A Pod only reads Secrets of its own namespace: one Secret per namespace.
 
 1. On GitLab: *Settings → Repository → Deploy tokens → Add token*, scope **`read_registry`** only, with an expiration date. Keep the username and token (shown once) in a password manager.
-2. Create the Secret (the token is typed without echo and stays out of the shell history):
+2. Create the namespaces (`AlreadyExists` is fine: the namespaces may have been created for another project), then the Secret in each of them (the token is typed without echo and stays out of the shell history):
 
    ```bash
    kubectl config current-context      # must be minikube
+   kubectl create namespace dev
+   kubectl create namespace staging
    read -rs TOKEN
-   kubectl create secret docker-registry workshop-api-registry \
-     --docker-server=registry.gitlab.com \
-     --docker-username=<deploy token username> \
-     --docker-password="$TOKEN"
+   for ns in dev staging; do
+     kubectl create secret docker-registry workshop-api-registry -n "$ns" \
+       --docker-server=registry.gitlab.com \
+       --docker-username=<deploy token username> \
+       --docker-password="$TOKEN"
+   done
    unset TOKEN
    ```
 
@@ -384,33 +420,50 @@ The kubelet (not the container) uses this Secret to pull the image. When the tok
 ### 2. Check the chart
 
 ```bash
-helm lint --strict helm/workshop-api-chart
-helm template workshop-api helm/workshop-api-chart          # rendered YAML, no cluster needed
+helm lint --strict $C -f $C/values-<env>.yaml
+diff <(helm template workshop-api $C) <(helm template workshop-api $C -f $C/values-<env>.yaml)   # only the overrides
 minikube start
-helm install workshop-api helm/workshop-api-chart --dry-run=server --hide-secret   # validated by the API server, nothing created
+helm install workshop-api $C -n <env> -f $C/values-<env>.yaml --dry-run=server --hide-secret   # validated by the API server, nothing created
 ```
 
 `lint` checks the chart structure and the template syntax, not the Kubernetes fields: the server dry run does. A dry run prints every manifest, Secrets included: `--hide-secret` masks them.
 
 ### 3. Install and check
 
+`dev` uses the sandbox password from `values.yaml`:
+
 ```bash
-helm install workshop-api helm/workshop-api-chart
-helm list                              # workshop-api, deployed, app version 0.2.5
-kubectl get pods -w                    # both Pods end 1/1 Running; the API may restart a few times first
-kubectl get pvc                        # workshop-api-db-pvc Bound
-kubectl get endpointslices -l kubernetes.io/service-name=workshop-api-db-service   # the database Pod IP
+helm install workshop-api $C -n dev -f $C/values-dev.yaml
 ```
 
-Helm records each release revision in a Secret of the namespace (`sh.helm.release.v1.workshop-api.v1`).
+`staging` gets its own password. Generate it once and keep it in a password manager: every later `helm upgrade` of `staging` needs it (see [Update](#6-update)). Hex only, because `--set` reads `,` and `=` as separators:
+
+```bash
+openssl rand -hex 16
+read -rs DB_PASSWORD
+helm install workshop-api $C -n staging -f $C/values-staging.yaml --set db.password="$DB_PASSWORD"
+unset DB_PASSWORD
+```
+
+Then, in each namespace:
+
+```bash
+helm list -A                                                 # one workshop-api release per namespace
+kubectl get pods -n <env> -w                                 # dev: API + database, staging: 2 API + database, all 1/1 Running
+kubectl describe pods -n <env> -l app=workshop-api-app | grep -E "Image:|Pulled"   # dev: :main, staging: :0.2.5
+kubectl get pvc -n <env>                                     # workshop-api-db-pvc Bound
+kubectl get endpointslices -n <env> -l kubernetes.io/service-name=workshop-api-app-service   # one IP per API Pod
+```
+
+Same release name in both namespaces: the objects have the same names, only the namespace differs. Helm records each release revision in a Secret of the namespace (`sh.helm.release.v1.workshop-api.v1`).
 
 ### 4. Call the API
 
 ```bash
-minikube service workshop-api-app-service --url     # keep this terminal open
+minikube service workshop-api-app-service -n <env> --url     # keep this terminal open
 ```
 
-The command prints `http://127.0.0.1:<port>` and holds a tunnel to the Service (the node IP is not reachable with the Docker driver on macOS). In another terminal, with the printed port:
+The command prints `http://127.0.0.1:<port>` (a new local port each time) and holds a tunnel to the Service (the node IP is not reachable with the Docker driver on macOS). In another terminal, with the printed port:
 
 ```bash
 URL=http://127.0.0.1:54321
@@ -418,52 +471,68 @@ curl -X POST -H 'Content-Type: application/json' -d '{"name":"Helm"}' $URL/api/n
 curl $URL/api/notions
 ```
 
+Each environment has its own database: a notion created in `dev` does not appear in `staging`.
+
 ### 5. Check persistence
 
 The data survives a new database Pod:
 
 ```bash
-kubectl delete pod -l app=workshop-api-db
-kubectl get pods -w
+kubectl delete pod -n <env> -l app=workshop-api-db
+kubectl get pods -n <env> -w
 curl $URL/api/notions
 ```
 
 The notion is still there. The first call after the restart may fail while the API reopens its connections: call again.
 
-It also survives the removal of the release, since the PVC is kept and taken back by a release of the same name:
+It also survives the removal of the release, since the PVC is kept and taken back by a release of the same name (in `staging`, give the same password again):
 
 ```bash
-helm uninstall workshop-api            # prints: These resources were kept due to the resource policy
-helm install workshop-api helm/workshop-api-chart
+helm uninstall workshop-api -n dev            # prints: These resources were kept due to the resource policy
+helm install workshop-api $C -n dev -f $C/values-dev.yaml
 ```
 
 Then start `minikube service` again (new port) and call `/api/notions`: the notion is still there.
 
-### 6. Remove
+### 6. Update
+
+| Change | Command |
+|---|---|
+| new build of `main`, to `dev` | `kubectl rollout restart deployment workshop-api-app-deployment -n dev` (same values, so `helm upgrade` would not replace the Pods; the new Pods pull `:main` again) |
+| new release, to `staging` | `git pull` (the release commit updates `appVersion`), then `read -rs DB_PASSWORD` and `helm upgrade workshop-api $C -n staging -f $C/values-staging.yaml --set db.password="$DB_PASSWORD"` |
+| chart or values changed | `helm upgrade workshop-api $C -n <env> -f $C/values-<env>.yaml`, plus `--set db.password=...` in `staging` |
+
+⚠️ A `helm upgrade` of `staging` without `--set db.password` puts the sandbox default back in the Secret. PostgreSQL keeps the password of its first start, so the API is refused at its next restart (`password authentication failed`).
+
+### 7. Remove
 
 ```bash
-helm uninstall workshop-api
-kubectl delete pvc workshop-api-db-pvc     # deletes the data
-kubectl delete secret workshop-api-registry
+helm uninstall workshop-api -n <env>
+kubectl delete pvc workshop-api-db-pvc -n <env>     # deletes the data
+kubectl delete secret workshop-api-registry -n <env>
 ```
+
+`kubectl delete namespace <env>` deletes everything in it, the releases of other projects included.
 
 ### Troubleshooting
 
 | Symptom | Likely cause | Look at |
 |---|---|---|
-| `helm install` fails: `cannot re-use a name that is still in use` | the release already exists | `helm list`; `helm uninstall workshop-api` first |
+| `helm install` fails: `cannot re-use a name that is still in use` | the release already exists in this namespace | `helm list -n <env>`; `helm uninstall workshop-api -n <env>` first |
+| Service `workshop-api-app-service` not found | release installed under another name (objects are named after it), or wrong namespace | `helm list -A`, `kubectl get svc -n <env>` |
 | `helm template` or `lint` fails | template syntax, indentation | the line given in the error |
-| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, pull secret missing or token expired | `kubectl describe pod -l app=workshop-api-app` (Events) |
-| `CreateContainerConfigError` | Secret or key missing | `kubectl describe pod` (Events) |
-| API in `CrashLoopBackOff` with `UnknownHostException` | database Pod not ready yet (headless Service: no DNS record without a ready Pod); lasts if the database never gets ready | `kubectl logs -l app=workshop-api-app --previous`, `kubectl get pods` |
-| API logs `password authentication failed` | `db.password` changed while the PVC already holds a database: the `POSTGRES_*` variables are only read when the volume is empty | give the old password back, or delete the PVC to start from an empty database |
-| database Pod `Pending` | PVC not bound | `kubectl get pvc`, `kubectl describe pvc workshop-api-db-pvc` |
-| `Running` but `0/1` | readiness probe failing | `kubectl describe pod`, `kubectl logs` |
-| PV still `Released` after deleting the PVC (Minikube) | Minikube's provisioner only deletes the volumes it created since its last start (log: `identity annotation on PV does not match ours`) | `kubectl get pv`; `kubectl delete pv <name>`, then `minikube ssh -- sudo rm -rf /tmp/hostpath-provisioner/default/<pvc name>` (a PVC created again with that name would find the old files) |
+| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, pull secret missing in this namespace or token expired | `kubectl describe pod -n <env> -l app=workshop-api-app` (Events) |
+| `CreateContainerConfigError` | Secret or key missing | `kubectl describe pod -n <env>` (Events) |
+| API in `CrashLoopBackOff` with `UnknownHostException` | database Pod not ready yet (headless Service: no DNS record without a ready Pod); lasts if the database never gets ready | `kubectl logs -n <env> -l app=workshop-api-app --previous`, `kubectl get pods -n <env>` |
+| API logs `password authentication failed` | `db.password` changed while the PVC already holds a database (the `POSTGRES_*` variables are only read when the volume is empty), e.g. a `staging` upgrade without `--set db.password` | give the old password back, or delete the PVC to start from an empty database |
+| database Pod `Pending` | PVC not bound | `kubectl get pvc -n <env>`, `kubectl describe pvc workshop-api-db-pvc -n <env>` |
+| `Running` but `0/1` | readiness probe failing | `kubectl describe pod -n <env>`, `kubectl logs -n <env>` |
+| `dev` still runs an old `main` | Pods not restarted since the last build | `kubectl rollout restart deployment workshop-api-app-deployment -n dev` |
+| PV still `Released` after deleting the PVC (Minikube) | Minikube's provisioner only deletes the volumes it created since its last start (log: `identity annotation on PV does not match ours`) | `kubectl get pv`; `kubectl delete pv <name>`, then `minikube ssh -- sudo rm -rf /tmp/hostpath-provisioner/<env>/<pvc name>` (a PVC created again with that name would find the old files) |
 
-With a fixed tag the node keeps the image and does not pull it again, so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/workshop-api:0.2.5`.
+With a fixed tag (`staging`) the node keeps the image and does not pull it again (`already present on machine`), so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/workshop-api:0.2.5`.
 
-Design choices are recorded in [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04). The chart replaces the plain manifests of the `k8s/` folder (removed, see the decisions).
+Design choices are recorded in [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04) and [docs/decisions.md](docs/decisions.md#environments-2026-11-05). The chart replaces the plain manifests of the `k8s/` folder (removed, see the decisions).
 
 ## Publishing to GitLab Registry
 
